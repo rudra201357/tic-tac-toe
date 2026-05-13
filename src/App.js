@@ -14,10 +14,18 @@ function App() {
   const [opponentConnected, setOpponentConnected] = useState(false);
   const [score, setScore] = useState({ X: 0, O: 0, draws: 0 });
   const wsRef = useRef(null);
+  const reconnectTimeoutRef = useRef(null);
+  const reconnectAttemptsRef = useRef(0);
 
   // Initialize WebSocket connection
   useEffect(() => {
     const connectWebSocket = () => {
+      // Clear any pending reconnection timeouts
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
+
       try {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         
@@ -35,41 +43,63 @@ function App() {
           }
         }
 
-        console.log('Connecting to WebSocket at:', wsUrl);
+        console.log('Attempting to connect to WebSocket at:', wsUrl);
         wsRef.current = new WebSocket(wsUrl);
 
         wsRef.current.onopen = () => {
-          console.log('Connected to server');
+          console.log('✅ Connected to server');
           setMessage('');
+          reconnectAttemptsRef.current = 0; // Reset reconnect attempts on success
         };
 
         wsRef.current.onmessage = (event) => {
-          const data = JSON.parse(event.data);
-          handleServerMessage(data);
+          try {
+            const data = JSON.parse(event.data);
+            handleServerMessage(data);
+          } catch (error) {
+            console.error('Error parsing message:', error);
+          }
         };
 
         wsRef.current.onerror = (error) => {
-          console.error('WebSocket error:', error);
-          setMessage('Connection error. Make sure the backend server is running.');
+          console.error('❌ WebSocket error:', error);
+          setMessage('⚠️ Connection error. Make sure the backend server is running.');
         };
 
         wsRef.current.onclose = () => {
-          console.log('Disconnected from server');
-          setMessage('Server connection lost. Reconnecting...');
-          // Attempt to reconnect after 3 seconds
-          setTimeout(connectWebSocket, 3000);
+          console.log('🔌 Disconnected from server');
+          
+          // Exponential backoff: 1s, 2s, 4s, 8s, max 10s
+          const delayMs = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 10000);
+          reconnectAttemptsRef.current += 1;
+          
+          console.log(`Reconnection attempt ${reconnectAttemptsRef.current} in ${delayMs / 1000}s`);
+          setMessage(`Server disconnected. Reconnecting in ${delayMs / 1000}s...`);
+          
+          // Schedule reconnection
+          reconnectTimeoutRef.current = setTimeout(() => {
+            console.log('🔄 Attempting to reconnect...');
+            connectWebSocket();
+          }, delayMs);
         };
       } catch (error) {
-        console.error('Error connecting to WebSocket:', error);
-        setMessage('Failed to connect to server.');
+        console.error('❌ Error initializing WebSocket:', error);
+        setMessage('❌ Failed to initialize connection.');
       }
     };
 
     connectWebSocket();
 
+    // Cleanup function
     return () => {
+      console.log('Cleaning up WebSocket connection');
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
       if (wsRef.current) {
         wsRef.current.close();
+        wsRef.current = null;
       }
     };
   }, []);
