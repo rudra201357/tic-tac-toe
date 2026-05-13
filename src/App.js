@@ -17,32 +17,55 @@ function App() {
 
   // Initialize WebSocket connection
   useEffect(() => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsHost =
-      process.env.REACT_APP_WS_URL ||
-      (window.location.port === '3000'
-        ? `${window.location.hostname}:5000`
-        : window.location.host);
-    const wsUrl = `${protocol}//${wsHost}`;
-    wsRef.current = new WebSocket(wsUrl);
+    const connectWebSocket = () => {
+      try {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        
+        // Use environment variable if set, otherwise use current host
+        let wsUrl;
+        if (process.env.REACT_APP_WS_URL) {
+          wsUrl = process.env.REACT_APP_WS_URL;
+        } else {
+          // Local development: connect to localhost:5000
+          if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+            wsUrl = `${protocol}//localhost:5000`;
+          } else {
+            // Production: use current host (same domain)
+            wsUrl = `${protocol}//${window.location.host}`;
+          }
+        }
 
-    wsRef.current.onopen = () => {
-      console.log('Connected to server');
+        console.log('Connecting to WebSocket at:', wsUrl);
+        wsRef.current = new WebSocket(wsUrl);
+
+        wsRef.current.onopen = () => {
+          console.log('Connected to server');
+          setMessage('');
+        };
+
+        wsRef.current.onmessage = (event) => {
+          const data = JSON.parse(event.data);
+          handleServerMessage(data);
+        };
+
+        wsRef.current.onerror = (error) => {
+          console.error('WebSocket error:', error);
+          setMessage('Connection error. Make sure the backend server is running.');
+        };
+
+        wsRef.current.onclose = () => {
+          console.log('Disconnected from server');
+          setMessage('Server connection lost. Reconnecting...');
+          // Attempt to reconnect after 3 seconds
+          setTimeout(connectWebSocket, 3000);
+        };
+      } catch (error) {
+        console.error('Error connecting to WebSocket:', error);
+        setMessage('Failed to connect to server.');
+      }
     };
 
-    wsRef.current.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      handleServerMessage(data);
-    };
-
-    wsRef.current.onerror = (error) => {
-      console.error('WebSocket error:', error);
-      setMessage('Connection error. Please refresh the page.');
-    };
-
-    wsRef.current.onclose = () => {
-      console.log('Disconnected from server');
-    };
+    connectWebSocket();
 
     return () => {
       if (wsRef.current) {
@@ -126,9 +149,17 @@ function App() {
   };
 
   const createRoom = () => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'CREATE_ROOM' }));
+    if (!wsRef.current) {
+      setMessage('Connection not initialized. Please refresh the page.');
+      return;
     }
+    
+    if (wsRef.current.readyState !== WebSocket.OPEN) {
+      setMessage('Not connected to server. Please wait or refresh the page.');
+      return;
+    }
+    
+    wsRef.current.send(JSON.stringify({ type: 'CREATE_ROOM' }));
   };
 
   const joinRoom = () => {
@@ -136,26 +167,42 @@ function App() {
       setMessage('Please enter a room ID');
       return;
     }
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({ type: 'JOIN_ROOM', roomId: joinInput.trim() })
-      );
+    
+    if (!wsRef.current) {
+      setMessage('Connection not initialized. Please refresh the page.');
+      return;
     }
+    
+    if (wsRef.current.readyState !== WebSocket.OPEN) {
+      setMessage('Not connected to server. Please wait or refresh the page.');
+      return;
+    }
+    
+    wsRef.current.send(
+      JSON.stringify({ type: 'JOIN_ROOM', roomId: joinInput.trim() })
+    );
   };
 
   const makeMove = (index) => {
     if (!gameActive || board[index] !== null) return;
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({ type: 'MAKE_MOVE', position: index })
-      );
+    
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      setMessage('Connection lost. Please refresh the page.');
+      return;
     }
+    
+    wsRef.current.send(
+      JSON.stringify({ type: 'MAKE_MOVE', position: index })
+    );
   };
 
   const resetGame = () => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'RESET_GAME' }));
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      setMessage('Connection lost. Please refresh the page.');
+      return;
     }
+    
+    wsRef.current.send(JSON.stringify({ type: 'RESET_GAME' }));
   };
 
   const renderSquare = (index) => {
